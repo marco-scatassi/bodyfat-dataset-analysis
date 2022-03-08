@@ -1,0 +1,926 @@
+---
+title: 'Progetto di Foundations of Probability and Statistics: BodyFat'
+author: "Marco Scatassi, Niccolò Puccinelli"
+date: "7/11/2021"
+output: html_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, fig.align = "center")
+```
+<font size = "4"> 
+<body style="background-color:rgb(245, 245, 240);">
+
+
+```{r}
+
+udm <- function(name){
+  if(name == "Weight"){
+    return ("(kg)")
+  }
+  else if(name == "Age" || name == "Density" || name == 'BMI' || name == 'Density_a_meno1'){
+    #Nessuna unità di misura
+  }
+  else{
+    return("(cm)")
+  }
+}
+
+```
+
+
+```{r}
+
+from_inches_to_cm <- function(x){
+  return (x * 2.54)
+}
+
+from_lbs_to_kg <- function(x){
+  return (x / 2.20462)
+}
+
+```
+
+```{r}
+
+date_scatter <- function(xvar,yvar,dataset){
+  g = ggplot(dataset) +
+    geom_point(aes_string(x = xvar, y = yvar)) + 
+    theme_gray() +
+    labs(title = paste("Correlazione:",  round(cor(x = dataset[,xvar], y = dataset[,yvar]), 2),
+                       sep = " "), x = paste(xvar, udm(xvar), sep = " "), y = paste(yvar," (%)"))
+  
+  ggplotGrob(g)    
+}
+
+```
+
+
+```{r}
+
+date_box <- function(xvar){
+  g = Box_ <- ggplot(bodyfat) +
+    geom_boxplot(aes_string(y = xvar), fill = 'salmon') +
+    theme_hc() +
+    labs(title = "Box Plot", x = "", y = paste(xvar, udm(xvar), sep = " "))
+  
+  return(grid.arrange(Box_, ncol = 1, 
+               top = text_grob(paste("Box plot", xvar, sep = " - "), size = 15, face = "bold")))
+  
+  ggplotGrob(g) 
+}
+```
+
+
+```{r}
+partial_correlation <- function (z,x,y){
+  (cor(x,y)-cor(x,z)*cor(y,z))/((1-cor(x,z)^2)*(1-cor(y,z)^2))^0.5
+}
+```
+
+
+```{r}
+
+#Funzione che si occupa dei grafici dei modelli
+graphs_ <- function(model, residuals, name){
+  par(mfrow = c(1, 2))
+  hist(residuals, main = "Istogramma dei residui", xlab = "Residui", col = 'palegreen3')
+  boxplot(residuals, main = "Box plot dei residui", xlab = "Residui", col = 'salmon')
+  par(mfrow = c(1, 1))
+  plot(model, which = c(1), main = paste('Modello di regressione', name, sep = " "))
+  gg_qqplot(model, scale.factor = 1)
+}
+
+```
+
+```{r}
+prediction <- function(model, perc){
+  prediction <- predict(model, newdata = bodyfat.test)
+  prediction <- data.frame(as.list(prediction))
+  diff <- ((prediction - bodyfat.test$BodyFat) / abs(bodyfat.test$BodyFat)) * 100
+  diff <- diff < perc
+  print(paste("Valori correttamente predetti con il", perc, "% di margine:", sep = " "))
+  print(paste(sum(diff), 50, sep = "/"))
+  print(paste("Percentuale:", round(sum(diff) / 50 * 100, 2), sep = " "))
+}
+```
+
+```{r}
+prediction_graph <- function(model){
+  pred.int <- as.data.frame(predict(model, newdata = bodyfat.test, interval = "prediction"))
+  pred.int$real <- bodyfat.test[, 2]
+  pred.int$diff <- abs(pred.int$fit - pred.int$real)
+  p <- ggplot(pred.int, aes(x = fit, y = real)) +
+    geom_point() +
+    stat_smooth(method = lm, formula = y ~ x) + 
+    geom_line(aes(y = lwr), color = "red", linetype = "dashed") +
+    geom_line(aes(y = upr), color = "red", linetype = "dashed") +
+    ggtitle("Differenza tra valori predetti e valori reali") +
+    xlab("Valori predetti") + ylab("Valori reali")
+  p
+}
+```
+
+
+# ABSTRACT
+
+::: {align="justify"}
+Nel seguente progetto è presentata l'analisi del dataset "Bodyfat". Lo scopo dell'analisi è quello di riuscire a prevedere la percentuale di grasso corporeo utilizzando misure fisiche facilmente ottenibili. Il dataset è esplorato e poi suddiviso in un training-set contente l'80% delle osservazioni iniziali, scelte casualmente, e in un test-set contenente il restante 20%. Successivamente, è effettuata un'analisi descrittiva del training-set, ponendo particolare attenzione alla correlazione fra le variabili in esso raccolte. Sono poi sviluppati diversi modelli di regressione e confrontati.
+:::
+
+# 1. Descrizione del dataset
+
+::: {align="justify"}
+Il dataset è costituito da 251 osservazioni relative a 15 attributi. In particolare:
+
+-   Density determined from underwater weighing
+-   Percent body fat from Siri's (1956) equation (variabile **target**)
+-   Age (years)
+-   Weight (lbs)
+-   Height (inches)
+-   Neck circumference (cm)
+-   Chest circumference (cm)
+-   Abdomen circumference (cm)
+-   Hip circumference (cm)
+-   Thigh circumference (cm)
+-   Knee circumference (cm)
+-   Ankle circumference (cm)
+-   Biceps (extended) circumference (cm)
+-   Forearm circumference (cm)
+-   Wrist circumference (cm)
+
+La percentuale di bodyfat è calcolata a partire dalla variabile *Density* mediante la seguente equazione:
+
+$\%$ $BodyFat$ $=$ $(\frac{495}{Density}) - 450$
+
+Sussiste perciò una relazione lineare diretta tra *BodyFat* e $Density^{-1}$, rendendo dunque l'utilizzo di *Density* come variabile esplicativa in un modello di regressione non significativo. *Density* verrà comunque impiegata ai fini di un confronto con il modello di regressione costituito dalle variabili concernenti le misurazioni fisiche.
+
+:::
+
+# 2. Librerie utilizzate
+
+::: {align="justify"}
+Sono state impiegate le seguenti librerie:
+
+-   *fBasics*: funzione *basicStats* per un sommario dei principali valori statistici.
+
+-   *tidyverse*: package contenente varie utilities grafiche e organizzative. Nello specifico:
+
+    -   *ggplot2*: libreria per la creazione e la manipolazione di grafici.
+    -   *dplyr*: libreria per la gestione dei dati.
+
+-   *gridExtra*: funzione *grid.arrange* per la presentazione multipla di grafici creati con *ggplot2*.
+
+-   *ggpubr*: libreria contenente ulteriori utilities grafiche e testuali.
+
+-   *corrplot*: libreria impiegata per la creazione dei grafici di correlazione.
+
+-   *MASS*: libreria contenente la funzione *stepAIC*, la quale effettua una selezione *stepwise* del modello.
+
+-   *lindia*: funzione *gg_qplot* per una migliore visualizzazione del Normal-QQ Plot.
+
+-   *knitr*: libreria contenente utilities per la visualizzazione grafica delle tabelle in R-Markdown.
+:::
+
+```{r, warning=FALSE}
+
+library(fBasics)
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(gridExtra)
+library(ggpubr)
+library(dplyr)
+library(corrplot)
+library(MASS)
+library(lindia)
+library(knitr)
+
+```
+
+# 3. Analisi descrittiva
+
+## 3.1 Apertura file e gestione variabili
+
+```{r}
+
+bodyfat <- read.csv("Bodyfat.csv")
+
+```
+
+::: {align="justify"}
+Per comodità interpretativa cambiamo l'unità di misura delle variabili *Height* (da inches a cm) e *Weight* (da lbs a kg).
+:::
+
+```{r}
+
+bodyfat$Height <- sapply(bodyfat$Height, from_inches_to_cm)
+bodyfat$Weight <- sapply(bodyfat$Weight, from_lbs_to_kg)
+
+```
+
+::: {align="justify"}
+Dopo la modifica delle variabili il dataset si presenta nella seguente forma:
+:::
+
+```{r, results='asis'}
+
+kable(head(bodyfat[,1:15]), align = "c", "simple")
+
+```
+
+## 3.2 Individuazione e rimozione di valori nulli e anomali
+
+::: {align="justify"}
+Il dataset non presenta valori nulli:
+
+```{r}
+Nan = c()
+for (i in seq(1,length(colnames(bodyfat)))){
+ Nan[i] = sum(bodyfat[is.na(bodyfat$col)==TRUE])
+}
+```
+
+```{r}
+kable(t(data.frame(Nan, row.names = colnames(bodyfat))))
+```
+
+
+Per individuare i valori anomali procediamo come segue:
+
+-   Si grafica lo scatterplot tra $Density^{-1}$ e *BodyFat*. In virtù della relazione precedente i punti dovrebbero essere sostanzialmente allineati in modo tale da formare una retta;
+
+-   Si controllano i box plot associati a ciascuna variabile.
+:::
+
+```{r}
+
+  bodyfat$Density_a_meno1 = (bodyfat$Density)^-1
+  ggplot(bodyfat) +
+    geom_point(aes(x = Density_a_meno1, y = BodyFat)) + 
+    theme_gray() +
+    labs(title = paste("Correlazione:",  round(cor(x = bodyfat$Density_a_meno1, y = bodyfat$BodyFat), 2),
+                       sep = " "), x = "Density^(-1)", y = "Bodyfat (%)")
+  
+```
+
+::: {align="justify"}
+Dal grafico emergono 4 osservazioni anomale che risultano essere:
+
+-   48
+-   76
+-   96
+-   182
+
+Si procede quindi alla loro rimozione.
+:::
+
+```{r echo=TRUE}
+
+bodyfat <- bodyfat[-c(48, 76, 96, 182), ]
+
+```
+
+::: {align="justify"}
+Consideriamo i box plot di Height, Weight e Ankle.
+:::
+
+```{r include = FALSE}
+grobs1_ = mapply(date_box, colnames(bodyfat))
+```
+
+```{r}
+grid.arrange(grobs = grobs1_[c(4,5,12)], nrow = 1, ncol = 3)
+```
+
+::: {align="justify"}
+Si verifica che vi sono quattro osservazioni estremamente anomale, ossia quelle relative a:
+
+-  soggetto con Height circa uguale a 75cm
+-  soggetto con Weight circa uguale a 160Kg
+-  soggetti con Ankle circa uguale a 35cm
+
+Procediamo dunque alla loro rimozione.
+:::
+
+
+```{r echo = TRUE}
+bodyfat <- bodyfat %>% dplyr::filter(Height >= 100)
+bodyfat <- bodyfat %>% dplyr::filter(Weight < 160)
+bodyfat <- bodyfat %>% dplyr::filter(Ankle < 30)
+
+```
+
+
+::: {align="justify"}
+Verifichiamo i box plot delle restanti variabili.
+:::
+
+```{r}
+
+grid.arrange(grobs = grobs1_[c(1,2,3,6,7,8)], nrow = 2, ncol = 3, 
+             top = text_grob("", size = 15, face = "bold"))
+grid.arrange(grobs = grobs1_[c(9,10,11,13,14,15)], nrow = 2, ncol = 3)
+
+```
+
+::: {align="justify"}
+Dai precedenti non si riscontrano altre osservazioni così anomale da poter influenzare negativamente il modello di regressione e che quindi è utile rimuovere.
+::: 
+
+```{r}
+
+#bodyfat <- bodyfat %>% dplyr::filter(Hip <= 120)
+#bodyfat <- bodyfat %>% dplyr::filter(Ankle <= 30)
+
+```
+
+
+## 3.4 Analisi a un fattore
+
+::: {align="justify"}
+Prima di studiare in dettaglio le correlazioni tra le variabili del dataset, in particolare quelle con la variabile target, si indaga se vi sia o meno dipendenza in media fra l'età dei soggetti e BodyFat.
+
+In particolare si aggiunge una colonna *Fascia_età* che ha tre modalità: 
+
+- Giovane (Age <= 30)
+- Adulto  (30< Age < 60)
+- Anziano (Age >= 60)
+
+e si cerca se in media il BodyFat sia o meno influenzato dall'appartenenza ad una certa fascia.
+:::
+
+```{r, include=FALSE}
+
+n_g = dim(bodyfat %>% dplyr::filter(Age <= 30))[1]
+n_ad = dim(bodyfat %>% dplyr::filter(Age < 60 & Age >30))[1]
+n_az = dim(bodyfat %>% dplyr::filter(Age >= 60))[1]
+
+bodyfat_order_age <- bodyfat[order(bodyfat$Age),]
+
+Fascia <- c(rep('Giovane',n_g), rep('Adulto', n_ad), rep('Anziano', n_az))
+Fascia <- factor(Fascia)
+
+bodyfat_order_age$Fascia_età <- Fascia
+
+```
+
+
+```{r}
+plot(bodyfat_order_age$BodyFat ~ bodyfat_order_age$Fascia_età, xlab = 'Fascia_età', ylab = 'BodyFat')
+
+par(mfrow=c(1,2))
+
+Fascia_età =  bodyfat_order_age$Fascia_età
+
+plot.design(bodyfat_order_age$BodyFat ~ Fascia_età, fun = mean, ylab = 'Mean of BodyFat', xlab = '')
+plot.design(bodyfat_order_age$BodyFat ~ Fascia_età, fun = median, ylab = 'Median of BodyFat', xlab = '')
+```
+
+::: {align="justify"}
+Come si osserva dai grafici precedenti sia la media che la mediana di BodyFat sono le più alte in corrispondenza della fascia *Anziano* mentre risultano le più basse per la fascia *Giovane*. La variabilità entro i gruppi sembra comparabile come si deduce anche dal test di Bartlett.
+
+```{r echo = TRUE}
+bartlett.test(bodyfat_order_age$BodyFat,bodyfat_order_age$Fascia_età)
+```
+
+
+Prima di procedere con l'analisi della varianza a un fattore verifichiamo la normalità dei dati nei vari gruppi mediante l'uso di *qqnorm* e dei valori di skewness e kurtosis.
+:::
+
+```{r}
+BodyFat_Giovane = basicStats(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Giovane'])[c(15,16),]
+BodyFat_Adulto = basicStats(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Adulto'])[c(15,16),]
+BodyFat_Anziano = basicStats(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Anziano'])[c(15,16),]
+
+BodyFat_Fasce = cbind.data.frame(BodyFat_Giovane,BodyFat_Adulto,BodyFat_Anziano)
+rownames(BodyFat_Fasce) = c('skewness','kurtosis')
+
+kable(BodyFat_Fasce, row.names = TRUE, align = "c", "simple")
+```
+
+```{r}
+par(mfrow = c(1,3))
+
+qqnorm(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Giovane'], main = 'Giovane')
+qqline(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Giovane'])
+
+
+qqnorm(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Adulto'], main = 'Adulto')
+qqline(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Adulto'])
+
+qqnorm(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Anziano'], main = 'Anziano')
+qqline(bodyfat_order_age$BodyFat[bodyfat_order_age$Fascia_età=='Anziano'])
+```
+
+
+::: {align="justify"}
+I valori in tabella, di skewness e kurtosis, i qqplot e quanto già detto sulla varianza dei gruppi, mostrano come le ipotesi di normalità e omoschedasticità siano  applicabili.
+::: 
+
+::: {align="justify"}
+Considerazioni del tutto analoghe alle precedenti possono essere fatte osservando il grafico seguente, nel quale in particolare, sono riportate le funzioni di densità di BodyFat rispetto ai tre gruppi e i centri dei gruppi, nello scatterplot, che mostrano un andamento crescente al crescere della fascia di età.
+::: 
+
+```{r}
+Bodydensity = ggplot(bodyfat_order_age, aes(BodyFat, fill=Fascia_età)) + 
+  geom_density(alpha=.5) +
+  theme(legend.position = "none") +
+  labs(title = '')
+
+Bodyscatter = ggplot(bodyfat_order_age, aes(x = Age, y = BodyFat, color = Fascia_età)) + 
+    geom_point() +
+    stat_ellipse(geom = "polygon", alpha = 1/2, aes(fill = Fascia_età), type = 'euclid',                    level = 3) +
+    coord_fixed() + 
+    theme(legend.position=c(0,1), legend.justification=c(0,1), legend.key.height = unit(0.5,'cm'))
+
+grid.arrange(Bodyscatter,Bodydensity, ncol = 2, widths=c(4, 2.5))
+```
+
+::: {align="justify"}
+Procediamo dunque ad applicare il test di ipotesi a un fattore.
+::: 
+
+```{r echo = TRUE}
+oneway.test(bodyfat_order_age$BodyFat ~ bodyfat_order_age$Fascia_età, var.equal = TRUE)
+qf(0.95,2,244)
+```
+::: {align="justify"}
+I risultati precedenti portano al rifiuto dell'ipotesi nulla, il valore della statistica F calcolato è maggiore della soglia della regione critica.
+
+Concludiamo quindi che vi è dipendenza in media tra la fascia di età e la percentuale di grasso corporeo.
+:::
+
+## 3.5 Split train-test
+
+::: {align="justify"}
+Si divide ora il dataset in due parti: training-set (80%) e test-set (20%). La selezione viene effettuata in maniera casuale mediante la funzione *sample*.
+:::
+`
+
+```{r echo = TRUE}
+
+set.seed(123)
+train = sample(1:nrow(bodyfat), size = 0.8 * nrow(bodyfat))
+bodyfat.train = bodyfat[train, -c(16,17)]
+bodyfat.test = bodyfat[-train, -c(16,17)]
+
+```
+
+```{r,results='asis'}
+
+#kable(round(basicStats(bodyfat.train, 0.95)[-c(9, 10, 11, 12), ], 3)[, 1:15], align = "c", "simple")
+
+```
+
+## 3.6 Analisi descrittiva sul training set
+::: {align="justify"}
+Studiamo la variabile target BodyFat.
+:::
+
+```{r}
+#Distribuzione 
+BodyFat_ecdf <- ggplot(bodyfat.train) + 
+  stat_ecdf(aes(x = BodyFat), geom = "point") +
+  theme_gray() +
+  labs(title = "Distribuzione", x = "Body Fat (%)", y = "") 
+
+#Istogramma 
+BodyFat_hist <- ggplot(bodyfat.train) +
+  geom_histogram(aes(x = BodyFat), fill = 'palegreen3', color = 'black', bins = 8) +
+  theme_hc() +
+  labs(title = "Istogramma", x = "Body Fat (%)", y = "Frequenze assolute")
+
+#Box plot 
+BodyFat_box <- ggplot(bodyfat.train) +
+  geom_boxplot(aes(x = "", y = BodyFat), fill = 'salmon') +
+  theme_hc() +
+  labs(title = "Box Plot", x = "", y = "Body Fat (%)")
+
+grid.arrange(BodyFat_ecdf, BodyFat_hist, BodyFat_box, ncol = 3, 
+             top = text_grob("Grafici BodyFat", size = 15, face = "bold"))
+
+```
+
+```{r}
+BodyFat <- as.data.frame(row.names(basicStats(bodyfat.train, 0.95)[-c(9, 10, 11, 12), ]))
+BodyFat$BodyFat <- basicStats(bodyfat.train$BodyFat)[-c(9, 10, 11, 12), ]
+colnames(BodyFat) <- c('basicStat','BodyFat')
+
+kable(BodyFat, align = "c", "simple")
+```
+
+
+Come si osserva dai grafici e dalla tabella riassuntiva delle statistiche principali, la variabile target risulta avere una distribuzione sostanzialmente simmetrica, anche la curtosi è molto vicina a zero. Sostanzialmente BodyFat si distribuisce come una normale. Ciò è anche giustificato dal qqplot e dal test di Shapiro-Wilks.
+
+```{r}
+qqnorm(bodyfat.train$BodyFat, main = "QQplot BodyFat")
+qqline(bodyfat.train$BodyFat)
+```
+
+```{r, echo = TRUE}
+shapiro.test(bodyfat.train$BodyFat)
+```
+
+
+Otteniamo un *p-value* di circa 0.1 > 0.05, quindi accettiamo l'ipotesi nulla.
+
+Sono poi illustrati i grafici di dispersione tra *BodyFat* e le restanti variabili del dataset al fine di avere un'idea di quali siano le variabili maggiormente correlate a quella target.
+
+```{r, include=FALSE}
+grobs2_ = mapply(date_scatter, colnames(bodyfat.train[,-c(16)]), MoreArgs=list('BodyFat',bodyfat.train))
+```
+
+```{r}
+grid.arrange(grobs = grobs2_[1:6], nrow = 2, ncol = 3, 
+             top = text_grob("Grafici BodyFat: Scatter Plots ", size = 15, face = "bold"))
+grid.arrange(grobs = grobs2_[7:12], nrow = 2, ncol = 3)
+grid.arrange(grobs = grobs2_[13:15], nrow = 2, ncol = 3)
+```
+
+::: {align="justify"}
+Possiamo per lo stesso motivo considerare la seguente rappresentazione grafica della matrice di correlazione.
+::: 
+
+```{r}
+corrplot(cor(bodyfat.train[,-c(16)]), 
+         method = 'color', 
+         type = 'upper',
+         diag = FALSE,
+         outline = TRUE,
+         title = "Matrice di correlazione",
+         tl.srt = 30,
+         tl.cex = 0.7,
+         tl.col = 'black', 
+         addCoef.col = 'black',
+         number.cex = 0.6,
+         mar = c(0, 0, 1.5, 0))
+```
+
+::: {align="justify"}
+Dalle due rappresentazioni grafiche precedenti si evince come le variabili maggiormente correlate a *BodyFat* (non considerando *Density*) siano, in ordine:
+
+-   Abdomen (0.84)
+-   Chest (0.73)
+-   Hip (0.65)
+-   Weight (0.65)
+-   Thigh (0.53)
+-   Knee (0.49)
+-   Neck (0.49)
+
+Analizzando la matrice di correlazione associata alle variabili identificate si osserva come queste siano molto correlate anche fra di loro. 
+::: 
+
+```{r}
+corrplot(cor(bodyfat.train[,c(2,4,6,7,8,9,10,11)]), 
+         method = 'color', 
+         type = 'upper',
+         diag = FALSE,
+         outline = TRUE,
+         title = "Matrice di correlazione",
+         tl.srt = 30,
+         tl.cex = 0.8,
+         tl.col = 'black', 
+         addCoef.col = 'black',
+         number.cex = 0.85,
+         mar = c(0, 0, 1.5, 0))
+```
+
+::: {align="justify"}
+In particolare, ai fini di costruire un modello di regressione, risultano problematiche le correlazioni fra le prime 4 variabili più correlate a BodyFat.
+::: 
+
+```{r}
+corrplot(cor(bodyfat.train[,c(2,4,7,8,9)]), 
+         method = 'color', 
+         type = 'upper',
+         diag = FALSE,
+         outline = TRUE,
+         title = "Matrice di correlazione",
+         tl.srt = 30,
+         tl.cex = 0.8,
+         tl.col = 'black', 
+         addCoef.col = 'black',
+         number.cex = 0.85,
+         mar = c(0, 0, 1.5, 0))
+```
+
+::: {align="justify"}
+Cerchiamo ora di distinguere se la correlazione con la variabile target sia diretta o dovuta a qualche relazione tra le variabili interne, ossia se siamo o meno in presenza di correlazioni spurie.
+
+Le tabelle seguenti riportano in seconda colonna i valori di correlazione parziale fra le variabili che nominano la colonna stessa, rispetto alla variabile sulla riga corrispondente.  
+::: 
+
+```{r}
+kable(mapply(partial_correlation, bodyfat.train[,c(4,7,9)], MoreArgs = list(bodyfat.train$BodyFat, bodyfat.train$Abdomen)), col.names = 'BodyFat-Abdomen', "simple")
+```
+
+```{r}
+kable(mapply(partial_correlation, bodyfat.train[,c(7,8,9)], MoreArgs = list(bodyfat.train$BodyFat, bodyfat.train$Weight)),col.names = 'BodyFat-Weight',"simple")
+```
+
+```{r}
+kable(mapply(partial_correlation, bodyfat.train[,c(4,8,9)], MoreArgs = list(bodyfat.train$BodyFat, bodyfat.train$Chest)),col.names = 'BodyFat-Chest', "simple")
+```
+```{r}
+kable(mapply(partial_correlation, bodyfat.train[,c(4,7,8)], MoreArgs = list(bodyfat.train$BodyFat, bodyfat.train$Hip)),col.names = 'BodyFat-Hip', "simple")
+```
+
+
+::: {align="justify"}
+Dalle tabelle precedenti si osserva come sostanzialmente solo la correlazione della variabile *Abdomen* con *BodyFat* sia poco influenzata dalla correlazione fra *Abdomen* e le altre variabili. 
+Invece, la correlazione fra *Weight* e *BodyFat* può essere quasi totalmente spiegata da *Chest*, analogamente la correlazione fra *Chest* e *BodyFat* può essere quasi totalmente spiegata da *Abdomen* e la correlazione tra *Hip* e *BodyFat* dipende quasi interamente dalla correlazione tra *Hip* e le altre variabili.
+::: 
+
+
+# 4 REGRESSIONE LINEARE MUTLIPLA
+
+## 4.1 Selezione delle variabili
+
+::: {align="justify"}
+Affrontiamo ora il problema di regressione lineare multipla a partire dalle considerazioni fatte in precedenza sulla correlazione fra le variabili del dataset.
+
+In particolare, consideriamo intanto le variabili maggiormente correlate a BodyFat (> 0.4), i.e. *Abdomen*, *Chest*, *Weight*, *Hip*, *Thigh*, *Neck*, *Knee* e *Biceps*
+::: 
+
+::: {align="justify"}
+L'alta correlazione, fra tali variabili e BodyFat, porta al problema cosiddetto di multicollinearità. Proviamo dunque ad affrontarlo come segue:
+
+- La variabile *Weight* risulta correlata più alle altre covariate che a BodyFat, e come già osservato la sua correlazione con BodyFat è quasi interamente spiegata da quella con Abdomen, rimuoviamo dunque tale variabile;
+- *Abdomen* e *Chest* sono le covariate più correlate alla variabile target, tuttavia vi è una forte correlazione tra di esse. Pertanto, introduciamo come vaiabile esplicativa il loro rapporto (*AbCh*).
+::: 
+
+```{r}
+bodyfat.train$AbCh <- bodyfat.train$Abdomen / bodyfat.train$Chest
+bodyfat.test$AbCh <- bodyfat.test$Abdomen / bodyfat.test$Chest
+
+corrplot(cor(bodyfat.train[, c(2, 6, 7, 8, 9, 10, 11, 13, 16)]), 
+         method = 'color', 
+         type = 'upper',
+         diag = FALSE,
+         outline = TRUE,
+         title = "Grafico di correlazione",
+         tl.srt = 30,
+         tl.cex = 0.7,
+         tl.col = 'black', 
+         addCoef.col = 'black',
+         number.cex = 0.6,
+         mar = c(0, 0, 1.5, 0))
+```
+
+::: {align="justify"}
+La variabile *AbCh* risulta molto correlata a *BodyFat* e il problema di multicollinearità è stato ridotto. Tuttavia, è possibile effettuare un'ulteriore selezione:
+
+- *Abdomen* e *AbCh* sono ovviamente molto correlate. Rimuoviamo *Abdomen*;
+- Dopo *Abdomen*, *Hip* è la covariata più correlata ad *AbCh* (e, in generale, alle altre covariate). Rimuoviamo anche *Hip*.
+:::
+
+```{r}
+bodyfat.train.1 <- bodyfat.train[, c(2, 6, 7, 10, 11, 13, 16)]
+
+corrplot(cor(bodyfat.train[, c(2, 6, 7, 10, 11, 13, 16)]), 
+         method = 'color', 
+         type = 'upper',
+         diag = FALSE,
+         outline = TRUE,
+         title = "Grafico di correlazione",
+         tl.srt = 30,
+         tl.cex = 0.7,
+         tl.col = 'black', 
+         addCoef.col = 'black',
+         number.cex = 0.6,
+         mar = c(0, 0, 1.5, 0))
+```
+
+::: {align="justify"}
+Sebbene continui a sussistere, il problema relativo alla multicollinearità è stato ridotto.
+:::
+
+## 4.2 Il modello di regressione
+
+::: {align="justify"}
+Per la costruzione iniziale del modello di regressione impieghiamo le tre covariate più correlate a *BodyFat* (*AbCh*, *Chest* e *Thigh*), lasciando momentaneamente da parte *Neck*, *Knee* e *Biceps*. 
+:::
+
+::: {align="justify"}
+Occupiamoci ora della scelta del modello di regressione. Impieghiamo dunque la funzione `stepAIC` per una selezione *stepwise* del modello, date le covariate *AbCh*, *Chest* e *Thigh* e la variabile target *BodyFat*. 
+:::
+
+```{r, include = FALSE}
+#Modello AIC
+fitA.1 <- stepAIC(lm(BodyFat ~ Chest + Thigh + AbCh, data = bodyfat.train.1), direction = 'both')
+```
+```{r}
+summary(fitA.1)
+```
+
+::: {align="justify"}
+L'indice R-quadro indica che circa il 69% della variabilità totale è spiegato dalla relazione tra *AbCh*, *Chest* e *Thigh*. Le covariate e l'intercetta risultano significative. Proseguiamo con l'analisi dei residui:
+:::
+
+```{r}
+fitA.1.rstand <- rstandard(fitA.1)
+graphs_(fitA.1, fitA.1.rstand, 'A.1')
+```
+
+::: {align="justify"}
+Il grafico di dispersione dei residui presenta un andamento regolare intorno allo 0, mostrando una relazione di tipo lineare. Ciò non suggerisce quindi l'introduzione di un termine, ad esempio, quadratico o cubico. 
+
+Il diagramma quantile-quantile invece presenta una retta che segue l'andamento dei punti rappresentanti i residui standardizzati, eccezion fatta per le code, presso cui i punti si allontanano moderatamente dalla retta.
+
+Proviamo dunque a migliorare il modello mediante l'aggiunta di un'ulteriore covariata, scelta tra *Neck*, *Knee* e *Biceps*:
+:::
+
+```{r}
+fitA.11 <- update(fitA.1, . ~ . + Neck)
+fitA.12 <- update(fitA.1, . ~ . + Knee)
+fitA.13 <- update(fitA.1, . ~ . + Biceps)
+anova(fitA.1, fitA.11) 
+anova(fitA.1, fitA.12)
+anova(fitA.1, fitA.13)
+```
+::: {align="justify"}
+Dall'analisi delle tabelle, *Neck* risulta la covariata più significativa da aggiungere. Aggiungiamo dunque *Neck* e vediamo se è possibile migliorare ulteriormente il modello tramite l'aggiunta dell'altra covariata significativa, ovvero *Knee*.
+:::
+
+```{r}
+fitA.111 <- update(fitA.11, . ~ . + Knee)
+anova(fitA.11, fitA.111) 
+```
+::: {align="justify"}
+Anche l'aggiunta della variabile *Knee* risulta significativa, seppure non quanto la variabile *Neck*. Vediamo ora un sommario del modello così costruito:
+:::
+
+```{r}
+summary(fitA.111)
+```
+::: {align="justify"}
+Come si evince dalla tabella, la covariata *Thigh* non risulta più significativa. Rimuoviamola ed analizziamo il modello.
+:::
+
+```{r}
+fitA.1x <- update(fitA.111, . ~ . - Thigh)
+summary(fitA.1x)
+fitA.1x.rstand <- rstandard(fitA.1x)
+graphs_(fitA.1x, fitA.1x.rstand, 'A.1x')
+```
+
+::: {align="justify"}
+Il diagramma quantile-quantile risulta leggermente più fedele alla retta nei pressi delle code. Tuttavia, analizzando il grafico dei residui, notiamo la presenza di diversi valori anomali che fanno divergere l'andamento della curva dallo zero. Rimuoviamoli e fittiamo di nuovo il modello.
+:::
+
+```{r}
+bodyfat.train.1$index <-as.numeric(row.names(bodyfat.train.1))
+bodyfat.train.1 <- bodyfat.train.1[order(bodyfat.train.1$index), ]
+bodyfat.train.1 <- subset(bodyfat.train.1, bodyfat.train.1$index != '41'
+                          & bodyfat.train.1$index != '82'
+                          & bodyfat.train.1$index != '128'
+                          & bodyfat.train.1$index != '207'
+                          & bodyfat.train.1$index != '238'
+                          & bodyfat.train.1$index != '250')
+bodyfat.train.1 <- bodyfat.train.1[, - c(8)]
+
+fitA.1x <- lm(BodyFat ~ Neck + Chest + Knee + AbCh, data = bodyfat.train.1)
+summary(fitA.1x)
+fitA.1x.rstand <- rstandard(fitA.1x)
+graphs_(fitA.1x, fitA.1x.rstand, 'A.1x')
+```
+
+::: {align="justify"}
+Il grafico dei residui è migliorato significativamente e le code del diagramma quantile-quantile divergono in posizioni meno centrali. Anche l'indice R-quadro, rispetto al modello originale, risulta migliorato, seppur di solo il 4% (dal 69% al 73% circa). 
+:::
+
+# 5 PREDIZIONE E CONFRONTO CON DENSITA'
+
+::: {align="justify"}
+Valutiamo, tramite il test-set, le capacità predittive del modello appena costruito e confrontiamole con il modello costruito impiegando, come unica covariata, la variabile *Density*.
+:::
+
+## 5.1 PREDIZIONE
+
+::: {align="justify"}
+Verifichiamo la percentuale di valori "correttamente" predetti con cinque diverse percentuali di margine, i.e. l'errore tollerato. Successivamente grafichiamo la differenza, in valore assoluto, tra valori predetti e valori reali.
+:::
+```{r}
+
+prediction(fitA.1x, 25) 
+prediction(fitA.1x, 20) 
+prediction(fitA.1x, 15) 
+prediction(fitA.1x, 10) 
+prediction(fitA.1x, 5)
+
+prediction_graph(fitA.1x)
+```
+
+::: {align="justify"}
+Le linee rosse tratteggiate rappresentano gli estremi dell'intervallo di predizione, i.e. l'incertezza intorno ai singoli valori predetti. La banda intorno alla linea di regressione (in blu) rappresenta invece l'incertezza intorno alle previsioni medie. In entrambi i casi, il livello di confidenza/tolleranza è del 95%.
+
+I punti-dato del grafico risultano tutti compresi tra le due linee rosse tratteggiate rappresentanti gli estremi dell'intervallo di predizione. Inoltre, le percentuali di valori correttamente predetti, in relazione ai risultati ottenuti in fase di addestramento, sono ottime. In particolare, il modello riesce a predire l'86% dei valori (con una tolleranza del 25%) utilizzando misurazioni molto più comode da ottenere rispetto alla densità misurata sott'acqua.
+:::
+
+## 5.2 CONFRONTO CON DENSITA'
+
+::: {align="justify"}
+Anche per il modello avente come unica covariata la variabile *Density* effettuiamo una selezione in fase di regressione, in modo da garantire la parità di condizioni con il modello precedentemente costruito.
+:::
+
+```{r}
+bodyfat.train.density <- bodyfat.train[, c(1, 2)]
+
+fitDense.1 <- lm(BodyFat ~ Density, data = bodyfat.train.density)
+summary(fitDense.1)
+fitDense.1.rstand <- rstandard(fitDense.1)
+graphs_(fitDense.1, fitDense.1.rstand, 'Dense.1')
+```
+
+::: {align="justify"}
+L'indice R-quadro è molto alto, tuttavia, analizzando il diagramma di dispersione dei residui, notiamo un andamento leggermente parabolico. Proviamo dunque ad aggiungere un termine quadratico.
+:::
+
+```{r}
+fitDense.2 <- update(fitDense.1, . ~ . + I(Density^2))
+summary(fitDense.2)
+fitDense.2.rstand <- rstandard(fitDense.2)
+graphs_(fitDense.2, fitDense.2.rstand, 'Dense.2')
+```
+
+::: {align="justify"}
+Il grafico dei residui è significativamente migliorato. Ciò nonostante, analizzando anche il box plot dei residui, notiamo la presenza di qualche valore anomalo. Rimuoviamoli e fittiamo di nuovo il modello.
+:::
+
+```{r}
+bodyfat.train.density$index <- as.numeric(row.names(bodyfat.train.density))
+bodyfat.train.density <- bodyfat.train.density[order(bodyfat.train.density$index), ]
+bodyfat.train.density <- subset(bodyfat.train.density, bodyfat.train.density$index != '6' 
+                                & bodyfat.train.density$index != '36' 
+                                & bodyfat.train.density$index != '71' 
+                                & bodyfat.train.density$index != '128' 
+                                & bodyfat.train.density$index != '139' 
+                                & bodyfat.train.density$index != '169' 
+                                & bodyfat.train.density$index !=  '162'
+                                & bodyfat.train.density$index !=  '200'
+                                & bodyfat.train.density$index != '216')
+
+fitDense.2 <- lm(BodyFat ~ Density, data = bodyfat.train.density)
+fitDense.2 <- update(fitDense.2, . ~ . + I(Density^2))
+summary(fitDense.2)
+fitDense.2.rstand <- rstandard(fitDense.2)
+graphs_(fitDense.2, fitDense.2.rstand, 'Dense.2')
+```
+
+::: {align="justify"}
+Rimuovendo i valori anomali, otteniamo un indice R-quadro pari al 100%. Ciò significa che *Density* riesce a spiegare la totalità della variabile target *BodyFat*. Il grafico dei residui risulta ora molto centrato intorno allo zero. Per questi motivi ci aspettiamo un'alta capacità predittiva. 
+:::
+
+```{r}
+prediction(fitDense.2, 1) 
+prediction_graph(fitDense.2)
+```
+
+::: {align="justify"}
+La capacità predittiva è pressoché del 100%, come si evince anche dal grafico, in cui i valori predetti coincidono quasi perfettamente coi valori reali.
+:::
+
+
+# 6 CONCLUSIONI
+
+::: {align="justify"}
+Riassumendo, è stata effettuata l'analisi descrittiva del dataset BodyFat, dalla quale si è verificato come la percentuale di bodyfat sia dipendente in media dalla fascia di età di appartenenza di un individuo. Inoltre, è stato costruito un modello di regressione lineare per predirre la percentuale di grasso corporeo. Il modello così costruito è stato poi confrontato col modello avente come unica covariata la variabile *Density*. Quest'ultimo presenta ovviamente una precisione molto alta, ma fa uso di un regressore (*Density*) più difficile da ottenere rispetto alle misurazioni corporee comuni, meno precise. Il modello di regressione avente quest'ultime come covariate risulta tuttavia abbastanza affidabile, con un indice R-quadro di circa il 73% e, soprattutto, una capacità predittiva dell'86% (con una tolleranza del 25%). In conclusione, tale modello rappresenta un buon compromesso tra prestazioni e complessità delle misurazioni.
+:::
+
+# APPENDICE: FUNZIONI IMPLEMENTATE
+
+::: {align="justify"}
+Ai fini di una migliore comprensione ed ottimizzazione del codice sono state implementate varie funzioni. Nello specifico:
+
+-   *udm*: Funzione prettamente accessoria che associa ad ogni variabile nei grafici la propria unità di misura.
+:::
+
+::: {align="justify"}
+-   Conversione delle unità di misura:
+
+    -   *from_inches_to_cm*: Pollici -\> Centimetri.
+    -   *from_lbs_to_kg*: Libbre -\> Chilogrammi.
+:::
+
+::: {align="justify"}
+-   *date_scatter*: Funzione che prende in input una variabile e restituisce una grob con le informazioni necessarie a creare lo Scatter plot della variabile rispetto a quella target *BodyFat*.
+:::
+
+::: {align="justify"}
+-   *date_box*: Funzione che prende in input una variabile e restituisce una grob con le informazioni necessarie a creare il Box plot della variabile.
+:::
+
+::: {align="justify"}
+-   *partial_correlation*: Funzione che restituisce la correlazione parziale tra x e y, dato z.
+:::
+
+
+::: {align="justify"}
+-   *graphs\_*: Funzione che, dato un modello, restituisce i grafici concernenti l'analisi del modello lineare con annessi residui.
+:::
+
+::: {align="justify"}
+-   *prediction*: Funzione che restituisce l'*accuracy* del modello passato come parametro. In particolare, l'*accuracy* è calcolata considerando il rapporto tra previsioni giuste e previsioni totali, dove con "giuste" intendiamo un margine di errore pari ad *err*.
+:::
+</font> 
